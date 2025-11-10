@@ -267,9 +267,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fetchAndProcessRow(nextRow, true)
         .then(data => {
           if (data) {
-            console.log(`Prefetch berhasil untuk index: ${nextIndex}.`);
+            console.log(`Prefetch data berhasil untuk index: ${nextIndex}.`);
             setPrefetchedData(data);
             setPrefetchedRowIndex(nextIndex);
+
+            // --- NEW: PRELOAD IMAGES ---
+            if (data.hisense?.images) {
+              // 1. Remove old preload links
+              document.querySelectorAll('link[data-prefetch-link="true"]').forEach(link => link.remove());
+
+              // 2. Get new image URLs
+              const imageUrls = Object.values(data.hisense.images);
+
+              // 3. Create and append new preload links
+              console.log(`Memulai pre-load untuk ${imageUrls.length} gambar.`);
+              imageUrls.forEach(url => {
+                if (typeof url === 'string') {
+                  const link = document.createElement('link');
+                  link.rel = 'preload';
+                  link.as = 'image';
+                  link.href = url;
+                  link.setAttribute('data-prefetch-link', 'true'); // Mark for cleanup
+                  document.head.appendChild(link);
+                }
+              });
+            }
           }
         })
         .catch(err => {
