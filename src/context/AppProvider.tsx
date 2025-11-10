@@ -106,47 +106,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // --- PREFETCHING STATE ---
   const [prefetchedData, setPrefetchedData] = useState<DkmData | null>(null);
-  const [prefetchedRowIndex, setPrefetchedRowIndex] = useState<number | null>(null);
+  const [prefetchedNPSN, setPrefetchedNPSN] = useState<string | null>(null); // Track by NPSN
   const isPrefetching = useRef(false);
 
   const toggleSidebar = () => setIsSidebarOpen((prev) => !prev);
-
-  const fetchAndProcessRow = useCallback(async (row: SheetRow, isPrefetch: boolean): Promise<DkmData | null> => {
-    if (!row) return null;
-
-    const headerRow = row.headerRow;
-    if (!headerRow) throw new Error("Header row tidak ditemukan.");
-    const npsnCol = headerRow.indexOf("NPSN");
-    const npsn = row.rowData[npsnCol];
-    if (!npsn) throw new Error("NPSN tidak ditemukan di baris ini.");
-
-    const cookie = localStorage.getItem("hisense_cookie");
-    if (!cookie) throw new Error("Cookie Hisense tidak ditemukan.");
-
-    const validName = await validateHisenseCookie(cookie);
-    if (!validName) {
-      setCookieValid(false);
-      setVerifierName(null);
-      setShowLoginModal(true);
-      if (!isPrefetch) {
-        setIsSubmitting(false);
-        setError("Cookie Hisense kadaluarsa atau tidak valid.");
-      }
-      return null;
-    }
-
-    const response = await fetch("/api/combined", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q: npsn, cookie }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Gagal mengambil data dari API eksternal. Status: ${response.status}`);
-    }
-
-    return response.json();
-  }, []);
 
   const handleSkip = useCallback(async (isValidData: boolean) => {
     if (allPendingRows.length === 0) return;
@@ -195,45 +158,97 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [allPendingRows, currentRowIndex]);
 
+  // --- NEW: Centralized function to process and set all states from DkmData ---
+  const processAndSetDkmData = useCallback((data: DkmData | null) => {
+    if (!data) {
+      setDkmData(null);
+      return;
+    }
+
+    if (!data.hisense.isGreen) {
+      console.log(`Auto-skipping NPSN: ${data.hisense.npsn} karena warna bukan hijau.`);
+      handleSkip(false);
+      return;
+    }
+
+    setDkmData(data);
+    setEvaluationForm(defaultEvaluationValues);
+    setCorrectSerialNumber(data.hisense.schoolInfo?.["Serial Number"] || "");
+    
+    const instalasiSelesai = data.hisense.processHistory?.find(h => h.status === "INSTALASI SELESAI");
+    if (instalasiSelesai?.tanggal) {
+      const datePart = instalasiSelesai.tanggal.split(" ")[0];
+      setInstallationDate(datePart);
+    } else {
+      setInstallationDate(""); // Clear date if not found
+    }
+  }, [handleSkip]);
+
+  const fetchAndProcessRow = useCallback(async (row: SheetRow, isPrefetch: boolean): Promise<DkmData | null> => {
+    if (!row) return null;
+
+    const headerRow = row.headerRow;
+    if (!headerRow) throw new Error("Header row tidak ditemukan.");
+    const npsnCol = headerRow.indexOf("NPSN");
+    const npsn = row.rowData[npsnCol];
+    if (!npsn) throw new Error("NPSN tidak ditemukan di baris ini.");
+
+    const cookie = localStorage.getItem("hisense_cookie");
+    if (!cookie) throw new Error("Cookie Hisense tidak ditemukan.");
+
+    const validName = await validateHisenseCookie(cookie);
+    if (!validName) {
+      setCookieValid(false);
+      setVerifierName(null);
+      setShowLoginModal(true);
+      if (!isPrefetch) {
+        setIsSubmitting(false);
+        setError("Cookie Hisense kadaluarsa atau tidak valid.");
+      }
+      return null;
+    }
+
+    const response = await fetch("/api/combined", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ q: npsn, cookie }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gagal mengambil data dari API eksternal. Status: ${response.status}`);
+    }
+
+    return response.json();
+  }, []);
+
   // --- Main data fetching effect ---
   useEffect(() => {
     if (allPendingRows.length === 0 || currentRowIndex >= allPendingRows.length) {
-      if (!isLoading) setDkmData(null);
+      if (!isLoading) processAndSetDkmData(null);
       return;
     }
 
     const currentRow = allPendingRows[currentRowIndex];
+    const npsnCol = currentRow.headerRow?.indexOf("NPSN");
+    const currentNPSN = npsnCol !== undefined && npsnCol !== -1 ? String(currentRow.rowData[npsnCol]) : null;
 
-    // 1. Check for prefetched data
-    if (prefetchedData && prefetchedRowIndex === currentRowIndex) {
+    // 1. Check for prefetched data using NPSN
+    if (prefetchedData && prefetchedNPSN === currentNPSN) {
       console.log("Menggunakan data dari prefetch.");
-      setDkmData(prefetchedData);
+      processAndSetDkmData(prefetchedData); // Use the centralized function
       setPrefetchedData(null);
-      setPrefetchedRowIndex(null);
+      setPrefetchedNPSN(null);
       setIsFetchingDetails(false);
     } else {
-      // 2. Fetch data normally if not prefetched
+      // 2. Fetch data normally if not prefetched or NPSN doesn't match
       setIsFetchingDetails(true);
-      setDkmData(null);
+      processAndSetDkmData(null); // Clear old data
       setError(null);
 
       fetchAndProcessRow(currentRow, false)
         .then(data => {
-          if (!data) return;
-
-          if (!data.hisense.isGreen) {
-            console.log(`Auto-skipping NPSN: ${data.hisense.npsn} karena warna bukan hijau.`);
-            handleSkip(false);
-            return;
-          }
-
-          setDkmData(data);
-          setEvaluationForm(defaultEvaluationValues);
-          setCorrectSerialNumber(data.hisense.schoolInfo?.["Serial Number"] || "");
-          const instalasiSelesai = data.hisense.processHistory?.find(h => h.status === "INSTALASI SELESAI");
-          if (instalasiSelesai?.tanggal) {
-            const datePart = instalasiSelesai.tanggal.split(" ")[0];
-            setInstallationDate(datePart);
+          if (data) {
+            processAndSetDkmData(data); // Use the centralized function
           }
         })
         .catch(err => {
@@ -244,42 +259,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setIsFetchingDetails(false);
         });
     }
-  }, [currentRowIndex, allPendingRows, isLoading, fetchAndProcessRow, handleSkip, prefetchedData, prefetchedRowIndex]);
+  }, [currentRowIndex, allPendingRows, isLoading, fetchAndProcessRow, processAndSetDkmData]);
 
   // --- Prefetching effect ---
   useEffect(() => {
-    // Prefetch only when the main data is loaded and there's a next item
     if (!dkmData || isFetchingDetails || allPendingRows.length <= 1 || isPrefetching.current) {
       return;
     }
 
-    const nextIndex = (currentRowIndex + 1) % allPendingRows.length;
+    const currentNPSN = dkmData.hisense.schoolInfo?.NPSN ? String(dkmData.hisense.schoolInfo.NPSN) : null;
 
-    // Don't prefetch if it's already prefetched or if it's the current one
-    if (prefetchedRowIndex === nextIndex || currentRowIndex === nextIndex) {
+    const currentItemIndexInPendingRows = allPendingRows.findIndex(row => {
+      const headerRow = row.headerRow;
+      if (!headerRow) return false;
+      const npsnColIndex = headerRow.indexOf("NPSN");
+      if (npsnColIndex === -1) return false;
+      return String(row.rowData[npsnColIndex]) === currentNPSN;
+    });
+
+    if (currentItemIndexInPendingRows === -1) {
+      return;
+    }
+
+    const nextIndex = currentItemIndexInPendingRows + 1;
+
+    if (nextIndex >= allPendingRows.length) {
       return;
     }
 
     const nextRow = allPendingRows[nextIndex];
+    const nextNPSNCol = nextRow.headerRow?.indexOf("NPSN");
+    const nextNPSN = nextNPSNCol !== undefined && nextNPSNCol !== -1 ? String(nextRow.rowData[nextNPSNCol]) : null;
+
+    if (!nextNPSN || prefetchedNPSN === nextNPSN) {
+      return;
+    }
+
     if (nextRow) {
       isPrefetching.current = true;
-      console.log(`Memulai prefetch untuk data berikutnya (index: ${nextIndex})...`);
+      console.log(`Memulai prefetch untuk data berikutnya (NPSN: ${nextNPSN})...`);
       fetchAndProcessRow(nextRow, true)
         .then(data => {
           if (data) {
-            console.log(`Prefetch data berhasil untuk index: ${nextIndex}.`);
+            console.log(`Prefetch data berhasil untuk NPSN: ${nextNPSN}.`);
             setPrefetchedData(data);
-            setPrefetchedRowIndex(nextIndex);
+            setPrefetchedNPSN(nextNPSN);
 
-            // --- NEW: PRELOAD IMAGES ---
             if (data.hisense?.images) {
-              // 1. Remove old preload links
               document.querySelectorAll('link[data-prefetch-link="true"]').forEach(link => link.remove());
-
-              // 2. Get new image URLs
               const imageUrls = Object.values(data.hisense.images);
-
-              // 3. Create and append new preload links
               console.log(`Memulai pre-load untuk ${imageUrls.length} gambar.`);
               imageUrls.forEach(url => {
                 if (typeof url === 'string') {
@@ -287,7 +315,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   link.rel = 'preload';
                   link.as = 'image';
                   link.href = url;
-                  link.setAttribute('data-prefetch-link', 'true'); // Mark for cleanup
+                  link.setAttribute('data-prefetch-link', 'true');
                   document.head.appendChild(link);
                 }
               });
@@ -296,15 +324,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         })
         .catch(err => {
           console.error("Gagal prefetch data berikutnya:", err.message);
-          // Clear prefetch state on failure
           setPrefetchedData(null);
-          setPrefetchedRowIndex(null);
+          setPrefetchedNPSN(null);
         })
         .finally(() => {
           isPrefetching.current = false;
         });
     }
-  }, [dkmData, currentRowIndex, allPendingRows, isFetchingDetails, fetchAndProcessRow, prefetchedRowIndex]);
+  }, [dkmData, allPendingRows, isFetchingDetails, fetchAndProcessRow, prefetchedNPSN]);
 
   // --- Initial data load effect ---
   useEffect(() => {
