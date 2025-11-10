@@ -1,8 +1,21 @@
 
 import { NextResponse } from "next/server";
 import * as cheerio from "cheerio";
+import NodeCache from "node-cache";
+
+// Buat instance cache. Data akan disimpan selama 1 jam (3600 detik).
+const datadikCache = new NodeCache({ stdTTL: 3600 });
 
 async function getDatadik(q: string) {
+  const cacheKey = `datadik-${q}`;
+  const cachedData = datadikCache.get(cacheKey);
+
+  if (cachedData) {
+    console.log(`Mengembalikan data datadik dari cache untuk q=${q}`);
+    return cachedData;
+  }
+  
+  console.log(`Mengambil data datadik baru untuk q=${q}`);
   const apiHeader = {
     "Content-Type": "application/x-www-form-urlencoded",
     "cookie": process.env.DATADIK_COOKIE || "",
@@ -40,7 +53,7 @@ async function getDatadik(q: string) {
     }
   }
 
-  return {
+  const result = {
     id,
     name,
     address,
@@ -50,6 +63,9 @@ async function getDatadik(q: string) {
     kepalaSekolah,
     ptk,
   };
+
+  datadikCache.set(cacheKey, result);
+  return result;
 }
 
 const hisenseUrl = "https://kemendikdasmen.hisense.id/";

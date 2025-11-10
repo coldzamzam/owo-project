@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo } from "react";
 import type { DkmData } from "@/context/AppProvider";
 import StickyInfoBox from "./StickyInfoBox";
 import type { HisenseData, HisenseProcessHistory } from "@/context/AppProvider";
@@ -35,7 +35,7 @@ const InfoField = ({
   </div>
 );
 
-export default function DkmDetails({ data }: { data: DkmData }) {
+function DkmDetails({ data }: { data: DkmData }) {
   const [isProsesOpen, setIsProsesOpen] = useState(false);
   const [isDokumentasiOpen, setIsDokumentasiOpen] = useState(true);
   const [mismatches, setMismatches] = useState<Record<string, boolean>>({});
@@ -510,3 +510,5 @@ export default function DkmDetails({ data }: { data: DkmData }) {
     </>
   );
 }
+
+export default memo(DkmDetails);
